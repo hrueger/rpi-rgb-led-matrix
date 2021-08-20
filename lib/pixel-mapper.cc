@@ -217,6 +217,49 @@ private:
   int parallel_;
 };
 
+class HannesMapper : public PixelMapper {
+public:
+  HannesMapper() {}
+
+  virtual const char *GetName() const { return "Hannes-Mapper"; }
+
+  virtual bool SetParameters(int chain, int parallel, const char *param) {
+    // ToDo
+    return true;
+  }
+
+  virtual bool GetSizeMapping(int matrix_width, int matrix_height,
+                              int *visible_width, int *visible_height) const {
+    *visible_width = matrix_width / 2;
+    *visible_height = matrix_height * 2;
+    return true;
+  }
+
+  virtual void MapVisibleToMatrix(int matrix_width, int matrix_height,
+                                  int x, int y,
+                                  int *matrix_x, int *matrix_y) const {
+    if (y >= 32 && y < 64) {
+      *matrix_y = y - 32;
+      *matrix_x = x + 320;
+    } else if (y >= 64 && y < 96) {
+      *matrix_y = y - 32;
+      *matrix_x = x;
+    } else if (y >= 96 && y < 128) {
+      *matrix_y = y - 64;
+      *matrix_x = x + 320;
+    } else {
+      *matrix_x = x;
+      *matrix_y = y;
+    }
+    if (*matrix_y >= 32) {
+      *matrix_y = *matrix_y - 32;
+    } else {
+      *matrix_y = *matrix_y + 32;
+    }
+  }
+
+};
+
 
 
 class VerticalMapper : public PixelMapper {
@@ -296,6 +339,7 @@ static MapperByName *CreateMapperMap() {
   RegisterPixelMapperInternal(result, new UArrangementMapper());
   RegisterPixelMapperInternal(result, new VerticalMapper());
   RegisterPixelMapperInternal(result, new MirrorPixelMapper());
+  RegisterPixelMapperInternal(result, new HannesMapper());
   return result;
 }
 
