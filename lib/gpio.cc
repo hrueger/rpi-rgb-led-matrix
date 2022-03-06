@@ -125,6 +125,22 @@ static volatile uint32_t *s_PWM_registers = NULL;
 static volatile uint32_t *s_CLK_registers = NULL;
 
 namespace rgb_matrix {
+static bool LinuxHasModuleLoaded(const char *name) {
+  FILE *f = fopen("/proc/modules", "r");
+  if (f == NULL) return false; // don't care.
+  char buf[256];
+  const size_t namelen = strlen(name);
+  bool found = false;
+  while (fgets(buf, sizeof(buf), f) != NULL) {
+    if (strncmp(buf, name, namelen) == 0) {
+      found = true;
+      break;
+    }
+  }
+  fclose(f);
+  return found;
+}
+
 #define GPIO_BIT(x) (1ull << x)
 
 GPIO::GPIO() : output_bits_(0), input_bits_(0), reserved_bits_(0),
@@ -161,6 +177,16 @@ gpio_bits_t GPIO::InitOutputs(gpio_bits_t outputs,
   }
 
   outputs &= ~(output_bits_ | input_bits_ | reserved_bits_);
+
+  // We don't know exactly what GPIO pins are occupied by 1-wire (can we
+  // easily do that ?), so let's complain only about the default GPIO.
+  if ((outputs & GPIO_BIT(4))
+      && LinuxHasModuleLoaded("w1_gpio")) {
+    fprintf(stderr, "This Raspberry Pi has the one-wire protocol enabled.\n"
+            "This will mess with the display if GPIO pins overlap.\n"
+            "Disable 1-wire in raspi-config (Interface Options).\n\n");
+  }
+
 #ifdef ENABLE_WIDE_GPIO_COMPUTE_MODULE
   const int kMaxAvailableBit = 45;
   uses_64_bit_ |= (outputs >> 32) != 0;
@@ -209,6 +235,7 @@ enum RaspberryPiModel {
 };
 
 static int ReadFileToBuffer(char *buffer, size_t size, const char *filename) {
+  buffer[0] = '\0';
   const int fd = open(filename, O_RDONLY);
   if (fd < 0) return -1;
   ssize_t r = read(fd, buffer, size - 1); // assume one read enough
@@ -249,9 +276,11 @@ static RaspberryPiModel DetermineRaspberryModel() {
     return PI_MODEL_1;
 
   case 0x04:  /* Pi 2 */
+  case 0x12:  /* Zero W 2 (behaves close to Pi 2) */
     return PI_MODEL_2;
 
   case 0x11: /* Pi 4 */
+  case 0x13: /* Pi 400 */
   case 0x14: /* CM4 */
     return PI_MODEL_4;
 
@@ -357,6 +386,10 @@ bool GPIO::Init(int slowdown) {
   return true;
 }
 
+bool GPIO::IsPi4() {
+  return GetPiModel() == PI_MODEL_4;
+}
+
 /*
  * We support also other pinouts that don't have the OE- on the hardware
  * PWM output pin, so we need to provide (impefect) 'manual' timing as well.
@@ -398,20 +431,11 @@ private:
   const std::vector<int> nano_specs_;
 };
 
-static bool LinuxHasModuleLoaded(const char *name) {
-  FILE *f = fopen("/proc/modules", "r");
-  if (f == NULL) return false; // don't care.
+// Check that 3 shows up in isolcpus
+static bool HasIsolCPUs() {
   char buf[256];
-  const size_t namelen = strlen(name);
-  bool found = false;
-  while (fgets(buf, sizeof(buf), f) != NULL) {
-    if (strncmp(buf, name, namelen) == 0) {
-      found = true;
-      break;
-    }
-  }
-  fclose(f);
-  return found;
+  ReadFileToBuffer(buf, sizeof(buf), "/sys/devices/system/cpu/isolated");
+  return index(buf, '3') != NULL;
 }
 
 static void busy_wait_nanos_rpi_1(long nanos);
@@ -457,6 +481,11 @@ bool Timers::Init() {
   // If we have it, we run the update thread on core3. No perf-compromises:
   WriteTo("/sys/devices/system/cpu/cpu3/cpufreq/scaling_governor",
           "performance");
+
+  if (GetPiModel() != PI_MODEL_1 && !HasIsolCPUs()) {
+    fprintf(stderr, "Suggestion: to slightly improve display update, add\n\tisolcpus=3\n"
+            "at the end of /boot/cmdline.txt and reboot (see README.md)\n");
+  }
   return true;
 }
 
